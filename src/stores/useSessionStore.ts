@@ -113,7 +113,14 @@ function computeMerged(server: NormalizedMessage[], realtime: NormalizedMessage[
   const serverIds = new Set(server.map(m => m.id));
   const extra = realtime.filter(m => !serverIds.has(m.id));
   if (extra.length === 0) return server;
-  return [...server, ...extra];
+
+  // Merge and sort by timestamp to ensure correct ordering
+  const merged = [...server, ...extra];
+  return merged.sort((a, b) => {
+    const timeA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+    const timeB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+    return timeA - timeB;
+  });
 }
 
 /**

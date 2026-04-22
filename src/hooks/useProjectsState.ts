@@ -58,6 +58,7 @@ const projectsHaveChanges = (
     return (
       serialize(nextProject.cursorSessions) !== serialize(prevProject.cursorSessions) ||
       serialize(nextProject.codexSessions) !== serialize(prevProject.codexSessions) ||
+      serialize(nextProject.opencodeSessions) !== serialize(prevProject.opencodeSessions) ||
       serialize(nextProject.geminiSessions) !== serialize(prevProject.geminiSessions)
     );
   });
@@ -68,6 +69,7 @@ const getProjectSessions = (project: Project): ProjectSession[] => {
     ...(project.sessions ?? []),
     ...(project.codexSessions ?? []),
     ...(project.cursorSessions ?? []),
+    ...(project.opencodeSessions ?? []),
     ...(project.geminiSessions ?? []),
   ];
 };
@@ -354,6 +356,21 @@ export function useProjectsState({
         return;
       }
 
+      const opencodeSession = project.opencodeSessions?.find((session) => session.id === sessionId);
+      if (opencodeSession) {
+        const shouldUpdateProject = selectedProject?.name !== project.name;
+        const shouldUpdateSession =
+          selectedSession?.id !== sessionId || selectedSession.__provider !== 'opencode';
+
+        if (shouldUpdateProject) {
+          setSelectedProject(project);
+        }
+        if (shouldUpdateSession) {
+          setSelectedSession({ ...opencodeSession, __provider: 'opencode' });
+        }
+        return;
+      }
+
       const geminiSession = project.geminiSessions?.find((session) => session.id === sessionId);
       if (geminiSession) {
         const shouldUpdateProject = selectedProject?.name !== project.name;
@@ -416,6 +433,8 @@ export function useProjectsState({
       setSelectedProject(project);
       setSelectedSession(null);
       setActiveTab('chat');
+      sessionStorage.removeItem('cursorSessionId');
+      sessionStorage.removeItem('pendingSessionId');
       navigate('/');
 
       if (isMobile) {

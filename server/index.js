@@ -26,11 +26,12 @@ import pty from 'node-pty';
 import fetch from 'node-fetch';
 import mime from 'mime-types';
 
-import { getProjects, getSessions, renameProject, deleteSession, deleteProject, addProjectManually, extractProjectDirectory, clearProjectDirectoryCache, searchConversations } from './projects.js';
+import { getProjects, getSessions, renameProject, deleteSession, deleteProject, addProjectManually, extractProjectDirectory, clearProjectDirectoryCache, searchConversations, upsertOpenCodeRuntimeSession, recordOpenCodeRuntimeMessage } from './projects.js';
 import { queryClaudeSDK, abortClaudeSDKSession, isClaudeSDKSessionActive, getActiveClaudeSDKSessions, resolveToolApproval, getPendingApprovalsForSession, reconnectSessionWriter } from './claude-sdk.js';
 import { spawnCursor, abortCursorSession, isCursorSessionActive, getActiveCursorSessions } from './cursor-cli.js';
 import { queryCodex, abortCodexSession, isCodexSessionActive, getActiveCodexSessions } from './openai-codex.js';
 import { spawnGemini, abortGeminiSession, isGeminiSessionActive, getActiveGeminiSessions } from './gemini-cli.js';
+import { spawnOpencode } from './opencode-cli.js';
 import sessionManager from './sessionManager.js';
 import gitRoutes from './routes/git.js';
 import authRoutes from './routes/auth.js';
@@ -48,6 +49,7 @@ import codexRoutes from './routes/codex.js';
 import geminiRoutes from './routes/gemini.js';
 import pluginsRoutes from './routes/plugins.js';
 import messagesRoutes from './routes/messages.js';
+import opencodeRoutes from './routes/opencode.js';
 import { createNormalizedMessage } from './providers/types.js';
 import { startEnabledPluginServers, stopAllPlugins, getPluginPort } from './utils/plugin-process-manager.js';
 import { initializeDatabase, sessionNamesDb, applyCustomSessionNames } from './database/db.js';
@@ -56,7 +58,7 @@ import { validateApiKey, authenticateToken, authenticateWebSocket } from './midd
 import { IS_PLATFORM } from './constants/config.js';
 import { getConnectableHost } from '../shared/networkHosts.js';
 
-const VALID_PROVIDERS = ['claude', 'codex', 'cursor', 'gemini'];
+const VALID_PROVIDERS = ['claude', 'codex', 'cursor', 'gemini', 'opencode'];
 
 // File system watchers for provider project/session folders
 const PROVIDER_WATCH_PATHS = [
@@ -92,6 +94,28 @@ function broadcastProgress(progress) {
             client.send(message);
         }
     });
+}
+
+async function broadcastProjectsUpdated(changeType = 'opencode-update', changedFile = 'opencode-runtime') {
+    try {
+        const updatedProjects = await getProjects();
+        const updateMessage = JSON.stringify({
+            type: 'projects_updated',
+            projects: updatedProjects,
+            timestamp: new Date().toISOString(),
+            changeType,
+            changedFile,
+            watchProvider: 'opencode',
+        });
+
+        connectedClients.forEach(client => {
+            if (client.readyState === WebSocket.OPEN) {
+                client.send(updateMessage);
+            }
+        });
+    } catch (error) {
+        console.error('[ERROR] Failed to broadcast opencode project update:', error);
+    }
 }
 
 // Setup file system watchers for Claude, Cursor, and Codex project/session folders
@@ -321,6 +345,9 @@ app.use('/api/plugins', authenticateToken, pluginsRoutes);
 
 // Unified session messages route (protected)
 app.use('/api/sessions', authenticateToken, messagesRoutes);
+
+// OpenCode ACP API Routes (protected)
+app.use('/api/opencode', authenticateToken, opencodeRoutes);
 
 // Agent API Routes (uses API key authentication)
 app.use('/api/agent', agentRoutes);
@@ -1448,6 +1475,174 @@ function handleChatConnection(ws, request) {
                 console.log('🔄 Session:', data.options?.sessionId ? 'Resume' : 'New');
                 console.log('🤖 Model:', data.options?.model || 'default');
                 await spawnGemini(data.command, data.options, writer);
+            } else if (data.type === 'opencode-command') {
+                console.log('[DEBUG] OpenCode ACP message:', data.command || '[Continue/Resume]');
+                console.log('📁 Project:', data.options?.projectPath || data.options?.cwd || 'Unknown');
+                console.log('🔄 Session:', data.options?.sessionId ? 'Resume' : 'New');
+                console.log('🤖 Model:', data.options?.model || 'default');
+
+                let sessionId = data.options?.sessionId;
+                try {
+                    // Dynamic import to avoid issues if module not loaded yet
+                    const { initOpenCode, createSession, sendPrompt } = await import('./providers/opencode/acp-adapter.js');
+
+                    // Initialize OpenCode ACP server if needed
+                    await initOpenCode();
+
+                    // Create new session if no sessionId provided
+                    if (!sessionId) {
+                        console.log('[DEBUG] Creating new OpenCode session...');
+                        const session = await createSession('CloudCLI Session', {
+                            directory: data.options?.cwd || data.options?.projectPath,
+                        });
+                        sessionId = session.id;
+                        console.log('[DEBUG] New session created:', sessionId);
+                        upsertOpenCodeRuntimeSession({
+                            id: sessionId,
+                            projectPath: data.options?.cwd || data.options?.projectPath || '',
+                            summary: data.command || 'OpenCode Session',
+                            messageCount: 0,
+                            lastActivity: new Date().toISOString(),
+                            name: 'OpenCode Session',
+                            createdAt: new Date().toISOString(),
+                        });
+
+                        // Send session_created event
+                        writer.send(createNormalizedMessage({
+                            kind: 'session_created',
+                            newSessionId: sessionId,
+                            sessionId: sessionId,
+                            provider: 'opencode',
+                        }));
+
+                        await broadcastProjectsUpdated('opencode-session-created', `opencode/${sessionId}`);
+                    }
+
+                    // Send processing status to UI
+                    writer.send({
+                        type: 'session-status',
+                        sessionId: sessionId,
+                        provider: 'opencode',
+                        isProcessing: true
+                    });
+
+                    // Send the prompt/message
+                    console.log('[DEBUG] Sending prompt to session:', sessionId);
+                    if (data.command && sessionId) {
+                        recordOpenCodeRuntimeMessage(
+                            sessionId,
+                            data.options?.cwd || data.options?.projectPath || '',
+                            'user',
+                            data.command,
+                        );
+                    }
+                    let response;
+                    try {
+                        response = await sendPrompt(sessionId, data.command, {
+                            model: data.options?.model,
+                            directory: data.options?.cwd || data.options?.projectPath,
+                        });
+                        console.log('[DEBUG] OpenCode response received:', JSON.stringify(response)?.substring(0, 500));
+                    } catch (err) {
+                        console.error('[DEBUG] OpenCode sendPrompt error:', err.message);
+                        throw err;
+                    }
+
+                    // Stream the response back - response.data contains { info: AssistantMessage, parts: Array<Part> }
+                    console.log('[DEBUG] Processing response, response is:', response ? 'truthy' : 'falsy', response?.constructor?.name);
+                    let assistantText = '';
+                    if (response) {
+                        const responseData = response.data || response;
+                        // Extract text content from parts array
+                        if (responseData.parts && Array.isArray(responseData.parts)) {
+                            for (const part of responseData.parts) {
+                                if (part.type === 'text' && part.text) {
+                                    assistantText += part.text;
+                                    writer.send(createNormalizedMessage({
+                                        kind: 'stream_delta',
+                                        content: part.text,
+                                        sessionId: sessionId,
+                                        provider: 'opencode',
+                                    }));
+                                }
+                            }
+                        } else if (typeof responseData === 'string') {
+                            // Fallback for string responses
+                            assistantText += responseData;
+                            writer.send(createNormalizedMessage({
+                                kind: 'stream_delta',
+                                content: responseData,
+                                sessionId: sessionId,
+                                provider: 'opencode',
+                            }));
+                        } else {
+                            // Last resort: stringify the whole response
+                            assistantText += JSON.stringify(responseData);
+                            writer.send(createNormalizedMessage({
+                                kind: 'stream_delta',
+                                content: JSON.stringify(responseData),
+                                sessionId: sessionId,
+                                provider: 'opencode',
+                            }));
+                        }
+                    }
+
+                    if (assistantText && sessionId) {
+                        recordOpenCodeRuntimeMessage(
+                            sessionId,
+                            data.options?.cwd || data.options?.projectPath || '',
+                            'assistant',
+                            assistantText,
+                        );
+                    }
+
+                    await broadcastProjectsUpdated('opencode-session-updated', `opencode/${sessionId}`);
+
+                    // Send stream_end to properly finalize the stream
+                    writer.send(createNormalizedMessage({
+                        kind: 'stream_end',
+                        sessionId: sessionId,
+                        provider: 'opencode',
+                    }));
+
+                    // Send complete
+                    console.log('[DEBUG] OpenCode sending complete for session:', sessionId, 'at', new Date().toISOString());
+                    writer.send(createNormalizedMessage({
+                        kind: 'complete',
+                        sessionId: sessionId,
+                        provider: 'opencode',
+                    }));
+                    console.log('[DEBUG] OpenCode complete sent for session:', sessionId);
+
+                    // Send not processing status
+                    console.log('[DEBUG] OpenCode sending isProcessing: false for session:', sessionId);
+                    writer.send({
+                        type: 'session-status',
+                        sessionId: sessionId,
+                        provider: 'opencode',
+                        isProcessing: false
+                    });
+
+                } catch (error) {
+                    console.error('[DEBUG] OpenCode ACP error:', error.message);
+                    writer.send(createNormalizedMessage({
+                        kind: 'error',
+                        content: `OpenCode error: ${error.message}`,
+                        provider: 'opencode',
+                    }));
+                    writer.send(createNormalizedMessage({
+                        kind: 'complete',
+                        exitCode: 1,
+                        provider: 'opencode',
+                    }));
+                    // Send not processing status on error
+                    writer.send({
+                        type: 'session-status',
+                        sessionId: sessionId,
+                        provider: 'opencode',
+                        isProcessing: false
+                    });
+                }
             } else if (data.type === 'cursor-resume') {
                 // Backward compatibility: treat as cursor-command with resume and no prompt
                 console.log('[DEBUG] Cursor resume session (compat):', data.sessionId);

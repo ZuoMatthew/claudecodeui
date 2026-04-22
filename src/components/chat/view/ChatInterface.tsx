@@ -71,6 +71,8 @@ function ChatInterface({
     setCodexModel,
     geminiModel,
     setGeminiModel,
+    opencodeModel,
+    setOpencodeModel,
     permissionMode,
     pendingPermissionRequests,
     setPendingPermissionRequests,
@@ -180,6 +182,7 @@ function ChatInterface({
     claudeModel,
     codexModel,
     geminiModel,
+    opencodeModel,
     isLoading,
     canAbortSession,
     tokenBudget,
@@ -275,6 +278,8 @@ function ChatInterface({
           ? t('messageTypes.codex')
           : provider === 'gemini'
             ? t('messageTypes.gemini')
+            : provider === 'opencode'
+              ? t('messageTypes.opencode')
             : t('messageTypes.claude');
 
     return (
@@ -396,12 +401,14 @@ function ChatInterface({
           isInputFocused={isInputFocused}
           placeholder={t('input.placeholder', {
             provider:
-              provider === 'cursor'
+            provider === 'cursor'
                 ? t('messageTypes.cursor')
                 : provider === 'codex'
                   ? t('messageTypes.codex')
                   : provider === 'gemini'
                     ? t('messageTypes.gemini')
+                    : provider === 'opencode'
+                      ? t('messageTypes.opencode')
                     : t('messageTypes.claude'),
           })}
           isTextareaExpanded={isTextareaExpanded}

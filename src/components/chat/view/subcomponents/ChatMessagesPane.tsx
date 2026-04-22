@@ -26,9 +26,11 @@ interface ChatMessagesPaneProps {
   setCodexModel: (model: string) => void;
   geminiModel: string;
   setGeminiModel: (model: string) => void;
+  opencodeModel: string;
+  setOpencodeModel: (model: string) => void;
   tasksEnabled: boolean;
   isTaskMasterInstalled: boolean | null;
-  onShowAllTasks?: (() => void) | null;
+  onShowAllTasks?: () => void;
   setInput: Dispatch<SetStateAction<string>>;
   isLoadingMoreMessages: boolean;
   hasMoreMessages: boolean;
@@ -71,6 +73,8 @@ export default function ChatMessagesPane({
   setCodexModel,
   geminiModel,
   setGeminiModel,
+  opencodeModel,
+  setOpencodeModel,
   tasksEnabled,
   isTaskMasterInstalled,
   onShowAllTasks,
@@ -154,6 +158,8 @@ export default function ChatMessagesPane({
           setCodexModel={setCodexModel}
           geminiModel={geminiModel}
           setGeminiModel={setGeminiModel}
+          opencodeModel={opencodeModel}
+          setOpencodeModel={setOpencodeModel}
           tasksEnabled={tasksEnabled}
           isTaskMasterInstalled={isTaskMasterInstalled}
           onShowAllTasks={onShowAllTasks}

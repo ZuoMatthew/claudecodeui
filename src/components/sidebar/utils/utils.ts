@@ -117,12 +117,17 @@ export const getAllSessions = (
     __provider: 'codex' as const,
   }));
 
+  const opencodeSessions = (project.opencodeSessions || []).map((session) => ({
+    ...session,
+    __provider: 'opencode' as const,
+  }));
+
   const geminiSessions = (project.geminiSessions || []).map((session) => ({
     ...session,
     __provider: 'gemini' as const,
   }));
 
-  return [...claudeSessions, ...cursorSessions, ...codexSessions, ...geminiSessions].sort(
+  return [...claudeSessions, ...cursorSessions, ...codexSessions, ...opencodeSessions, ...geminiSessions].sort(
     (a, b) => getSessionDate(b).getTime() - getSessionDate(a).getTime(),
   );
 };

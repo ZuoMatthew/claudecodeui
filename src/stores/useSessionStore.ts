@@ -322,12 +322,25 @@ export function useSessionStore() {
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
 
-      slot.serverMessages = data.messages || [];
+      const provider = opts.provider;
+      const serverMessages: NormalizedMessage[] = data.messages || [];
+      const serverIds = new Set(serverMessages.map((message) => message.id));
+
+      slot.serverMessages = serverMessages;
       slot.total = data.total ?? slot.serverMessages.length;
       slot.hasMore = Boolean(data.hasMore);
       slot.fetchedAt = Date.now();
-      // drop realtime messages that the server has caught up with to prevent unbounded growth.
-      slot.realtimeMessages = [];
+      // Keep realtime messages that haven't reached server history yet.
+      // This avoids dropping recent OpenCode assistant output when DB persistence lags.
+      slot.realtimeMessages = slot.realtimeMessages.filter((message) => !serverIds.has(message.id));
+
+      // For non-OpenCode providers, clear stale realtime control-only leftovers when server is caught up.
+      if (provider && provider !== 'opencode' && slot.realtimeMessages.length > 0) {
+        const hasStreamingMarker = slot.realtimeMessages.some((message) => message.id === `__streaming_${sessionId}`);
+        if (!hasStreamingMarker) {
+          slot.realtimeMessages = [];
+        }
+      }
       recomputeMergedIfNeeded(slot);
       notify(sessionId);
     } catch (error) {

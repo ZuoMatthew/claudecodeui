@@ -66,6 +66,7 @@ import Database from 'better-sqlite3';
 import os from 'os';
 import sessionManager from './sessionManager.js';
 import { applyCustomSessionNames } from './database/db.js';
+import { listSessions } from './providers/opencode/acp-adapter.js';
 
 // Import TaskMaster detection functions
 async function detectTaskMasterFolder(projectPath) {
@@ -197,6 +198,134 @@ async function detectTaskMasterFolder(projectPath) {
 
 // Cache for extracted project directories
 const projectDirectoryCache = new Map();
+const opencodeRuntimeSessions = new Map();
+const MAX_OPENCODE_RUNTIME_SESSIONS = 500;
+
+function pruneOpenCodeRuntimeSessions() {
+  if (opencodeRuntimeSessions.size <= MAX_OPENCODE_RUNTIME_SESSIONS) {
+    return;
+  }
+
+  const sorted = Array.from(opencodeRuntimeSessions.values()).sort(
+    (a, b) => new Date(a.lastActivity || 0) - new Date(b.lastActivity || 0),
+  );
+
+  const excess = opencodeRuntimeSessions.size - MAX_OPENCODE_RUNTIME_SESSIONS;
+  for (let i = 0; i < excess; i++) {
+    const session = sorted[i];
+    if (session?.id) {
+      opencodeRuntimeSessions.delete(session.id);
+    }
+  }
+}
+
+function coerceSummary(summary) {
+  if (!summary || typeof summary !== 'string') {
+    return 'OpenCode Session';
+  }
+  const normalized = summary.replace(/\s+/g, ' ').trim();
+  if (!normalized) {
+    return 'OpenCode Session';
+  }
+  return normalized.length > 100 ? `${normalized.slice(0, 97)}...` : normalized;
+}
+
+export function upsertOpenCodeRuntimeSession(session) {
+  if (!session?.id) {
+    return;
+  }
+
+  const existing = opencodeRuntimeSessions.get(session.id);
+  const nowIso = new Date().toISOString();
+
+  const next = {
+    id: session.id,
+    cwd: session.cwd || session.projectPath || existing?.cwd || '',
+    summary: coerceSummary(session.summary || existing?.summary || 'OpenCode Session'),
+    messageCount: Number(session.messageCount ?? existing?.messageCount ?? 0),
+    lastActivity: session.lastActivity || existing?.lastActivity || nowIso,
+    name: session.name || existing?.name || 'OpenCode Session',
+    createdAt: session.createdAt || existing?.createdAt || nowIso,
+  };
+
+  opencodeRuntimeSessions.set(session.id, next);
+  pruneOpenCodeRuntimeSessions();
+}
+
+export function recordOpenCodeRuntimeMessage(sessionId, projectPath, role, content) {
+  if (!sessionId) {
+    return;
+  }
+
+  const existing = opencodeRuntimeSessions.get(sessionId) || {
+    id: sessionId,
+    cwd: projectPath || '',
+    summary: 'OpenCode Session',
+    messageCount: 0,
+    lastActivity: new Date().toISOString(),
+    name: 'OpenCode Session',
+    createdAt: new Date().toISOString(),
+  };
+
+  const next = { ...existing };
+  if (projectPath && !next.cwd) {
+    next.cwd = projectPath;
+  }
+
+  next.messageCount = Number(next.messageCount || 0) + 1;
+  next.lastActivity = new Date().toISOString();
+
+  if (role === 'user' && typeof content === 'string') {
+    next.summary = coerceSummary(content);
+  }
+
+  opencodeRuntimeSessions.set(sessionId, next);
+  pruneOpenCodeRuntimeSessions();
+}
+
+function getOpenCodeRuntimeSessions(projectPath) {
+  const normalizedProjectPath = normalizeComparablePath(projectPath);
+  if (!normalizedProjectPath) {
+    return [];
+  }
+
+  return Array.from(opencodeRuntimeSessions.values())
+    .filter((session) => {
+      const sessionPath = normalizeComparablePath(session.cwd || '');
+      return Boolean(sessionPath) && sessionPath === normalizedProjectPath;
+    })
+    .map((session) => ({
+      id: session.id,
+      summary: coerceSummary(session.summary),
+      messageCount: Number(session.messageCount || 0),
+      lastActivity: session.lastActivity || new Date().toISOString(),
+      cwd: session.cwd || projectPath,
+      name: session.name || 'OpenCode Session',
+      createdAt: session.createdAt || new Date().toISOString(),
+    }));
+}
+
+function getOpenCodeRuntimeProjectPaths() {
+  const uniquePaths = new Map();
+
+  for (const session of opencodeRuntimeSessions.values()) {
+    const rawPath = session?.cwd;
+    const normalizedPath = normalizeComparablePath(rawPath);
+    if (!normalizedPath) {
+      continue;
+    }
+
+    if (!uniquePaths.has(normalizedPath)) {
+      uniquePaths.set(normalizedPath, path.resolve(rawPath));
+    }
+  }
+
+  return Array.from(uniquePaths.values());
+}
+
+function encodeProjectNameFromPath(projectPath) {
+  return projectPath.replace(/[^a-zA-Z0-9-]/g, '-');
+}
 
 // Clear cache when needed (called when project files change)
 function clearProjectDirectoryCache() {
@@ -437,6 +566,7 @@ async function getProjects(progressCallback = null) {
         isCustomName: !!customName,
         sessions: [],
         geminiSessions: [],
+        opencodeSessions: [],
         sessionMeta: {
           hasMore: false,
           total: 0
@@ -492,6 +622,15 @@ async function getProjects(progressCallback = null) {
         project.geminiSessions = [];
       }
       applyCustomSessionNames(project.geminiSessions, 'gemini');
+
+      // Also fetch OpenCode sessions for this project
+      try {
+        project.opencodeSessions = await getOpenCodeSessions(actualProjectDir) || [];
+      } catch (e) {
+        console.warn(`Could not load OpenCode sessions for project ${entry.name}:`, e.message);
+        project.opencodeSessions = [];
+      }
+      applyCustomSessionNames(project.opencodeSessions, 'opencode');
 
       // Add TaskMaster detection
       try {
@@ -566,7 +705,8 @@ async function getProjects(progressCallback = null) {
           total: 0
         },
         cursorSessions: [],
-        codexSessions: []
+        codexSessions: [],
+        opencodeSessions: []
       };
 
       // Try to fetch Cursor sessions for manual projects too
@@ -598,6 +738,14 @@ async function getProjects(progressCallback = null) {
       }
       applyCustomSessionNames(project.geminiSessions, 'gemini');
 
+      // Try to fetch OpenCode sessions for manual projects too
+      try {
+        project.opencodeSessions = await getOpenCodeSessions(actualProjectDir) || [];
+      } catch (e) {
+        console.warn(`Could not load OpenCode sessions for manual project ${projectName}:`, e.message);
+      }
+      applyCustomSessionNames(project.opencodeSessions, 'opencode');
+
       // Add TaskMaster detection for manual projects
       try {
         const taskMasterResult = await detectTaskMasterFolder(actualProjectDir);
@@ -626,6 +774,51 @@ async function getProjects(progressCallback = null) {
 
       projects.push(project);
     }
+  }
+
+  // Add OpenCode runtime-only projects so sessions created in paths without
+  // Claude metadata are still visible in the sidebar after page refresh.
+  const knownProjectPaths = new Set(
+    projects
+      .map((project) => normalizeComparablePath(project.fullPath || project.path || ''))
+      .filter(Boolean),
+  );
+
+  for (const runtimeProjectPath of getOpenCodeRuntimeProjectPaths()) {
+    const normalizedRuntimePath = normalizeComparablePath(runtimeProjectPath);
+    if (!normalizedRuntimePath || knownProjectPaths.has(normalizedRuntimePath)) {
+      continue;
+    }
+
+    const projectName = encodeProjectNameFromPath(runtimeProjectPath);
+    const displayName = await generateDisplayName(projectName, runtimeProjectPath);
+    const runtimeProject = {
+      name: projectName,
+      path: runtimeProjectPath,
+      displayName,
+      fullPath: runtimeProjectPath,
+      isManuallyAdded: true,
+      sessions: [],
+      geminiSessions: [],
+      sessionMeta: {
+        hasMore: false,
+        total: 0,
+      },
+      cursorSessions: [],
+      codexSessions: [],
+      opencodeSessions: [],
+    };
+
+    try {
+      runtimeProject.opencodeSessions = await getOpenCodeSessions(runtimeProjectPath) || [];
+    } catch (error) {
+      console.warn(`Could not load OpenCode sessions for runtime project ${runtimeProjectPath}:`, error.message);
+      runtimeProject.opencodeSessions = [];
+    }
+    applyCustomSessionNames(runtimeProject.opencodeSessions, 'opencode');
+
+    projects.push(runtimeProject);
+    knownProjectPaths.add(normalizedRuntimePath);
   }
 
   // Emit completion after all projects (including manual) are processed
@@ -1487,6 +1680,78 @@ async function getCodexSessions(projectPath, options = {}) {
 
   } catch (error) {
     console.error('Error fetching Codex sessions:', error);
+    return [];
+  }
+}
+
+// Fetch OpenCode sessions for a given project path
+async function getOpenCodeSessions(projectPath, options = {}) {
+  const { limit = 5 } = options;
+  try {
+    const normalizedProjectPath = normalizeComparablePath(projectPath);
+    if (!normalizedProjectPath) {
+      return [];
+    }
+
+    const sessions = await listSessions(projectPath);
+
+    const persistedSessions = sessions
+      .filter(session => {
+        // The ACP list endpoint is already directory-filtered. Keep entries that
+        // don't expose cwd in payload, otherwise compare explicitly when present.
+        const sessionDir = session.cwd || session.directory || session.path;
+        if (!sessionDir) return true;
+        const sessionProjectPath = normalizeComparablePath(sessionDir);
+        return Boolean(sessionProjectPath) && sessionProjectPath === normalizedProjectPath;
+      })
+      .map(session => {
+        const firstUserMessage = session.messages?.find(m => m.role === 'user')?.content ||
+          session.summary ||
+          'OpenCode Session';
+
+        return {
+          id: session.id,
+          summary: firstUserMessage.slice(0, 100),
+          messageCount: session.messages?.length || session.messageCount || 0,
+          lastActivity: session.lastActivity || session.updatedAt || new Date().toISOString(),
+          cwd: session.cwd || session.directory || session.path || projectPath,
+          name: session.title || session.name || 'OpenCode Session',
+          createdAt: session.createdAt || new Date().toISOString(),
+        };
+      })
+      .sort((a, b) => new Date(b.lastActivity) - new Date(a.lastActivity));
+    const runtimeSessions = getOpenCodeRuntimeSessions(projectPath);
+    const mergedById = new Map();
+
+    for (const session of runtimeSessions) {
+      mergedById.set(session.id, session);
+    }
+    for (const session of persistedSessions) {
+      const existing = mergedById.get(session.id);
+      const existingLastActivity = existing?.lastActivity ? new Date(existing.lastActivity).getTime() : 0;
+      const persistedLastActivity = session.lastActivity ? new Date(session.lastActivity).getTime() : 0;
+      const preferExistingSummary = existingLastActivity >= persistedLastActivity;
+      mergedById.set(session.id, {
+        ...existing,
+        ...session,
+        summary: preferExistingSummary
+          ? (existing?.summary || session.summary || 'OpenCode Session')
+          : (session.summary || existing?.summary || 'OpenCode Session'),
+        messageCount: Math.max(
+          Number(session.messageCount || 0),
+          Number(existing?.messageCount || 0),
+        ),
+      });
+    }
+
+    const normalizedSessions = Array.from(mergedById.values()).sort(
+      (a, b) => new Date(b.lastActivity) - new Date(a.lastActivity),
+    );
+
+    return limit > 0 ? normalizedSessions.slice(0, limit) : normalizedSessions;
+
+  } catch (error) {
+    console.error('Error fetching OpenCode sessions:', error);
     return [];
   }
 }
@@ -2551,5 +2816,7 @@ export {
   deleteCodexSession,
   getGeminiCliSessions,
   getGeminiCliSessionMessages,
+  upsertOpenCodeRuntimeSession,
+  recordOpenCodeRuntimeMessage,
   searchConversations
 };

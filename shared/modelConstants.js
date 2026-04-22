@@ -92,3 +92,19 @@ export const GEMINI_MODELS = {
 
   DEFAULT: "gemini-3.1-pro-preview",
 };
+
+/**
+ * OpenCode Models
+ * OpenCode uses any model that implements the /v1/chat/completions API.
+ * Model is determined by the provider configuration.
+ */
+export const OPENCODE_MODELS = {
+  OPTIONS: [
+    { value: "auto", label: "Auto (Provider Default)" },
+    { value: "claude", label: "Claude (Anthropic)" },
+    { value: "gpt", label: "GPT (OpenAI)" },
+    { value: "gemini", label: "Gemini (Google)" },
+  ],
+
+  DEFAULT: "auto",
+};

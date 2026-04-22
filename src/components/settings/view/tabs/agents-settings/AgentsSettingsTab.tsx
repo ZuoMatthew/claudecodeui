@@ -50,12 +50,17 @@ export default function AgentsSettingsTab({
       authStatus: providerAuthStatus.gemini,
       onLogin: () => onProviderLogin('gemini'),
     },
+    opencode: {
+      authStatus: providerAuthStatus.opencode || { authenticated: false, installed: false },
+      onLogin: () => onProviderLogin('opencode'),
+    },
   }), [
     onProviderLogin,
     providerAuthStatus.claude,
     providerAuthStatus.codex,
     providerAuthStatus.cursor,
     providerAuthStatus.gemini,
+    providerAuthStatus.opencode,
   ]);
 
   return (

@@ -48,6 +48,16 @@ export default function SidebarSessionItem({
 }: SidebarSessionItemProps) {
   const sessionView = createSessionViewModel(session, currentTime, t);
   const isSelected = selectedSession?.id === session.id;
+  const providerLabel =
+    session.__provider === 'opencode'
+      ? 'OpenCode'
+      : session.__provider === 'codex'
+        ? 'Codex'
+        : session.__provider === 'cursor'
+          ? 'Cursor'
+          : session.__provider === 'gemini'
+            ? 'Gemini'
+            : null;
 
   const selectMobileSession = () => {
     onProjectSelect(project);
@@ -98,6 +108,11 @@ export default function SidebarSessionItem({
                 <span className="text-xs text-muted-foreground">
                   {formatTimeAgo(sessionView.sessionTime, currentTime, t)}
                 </span>
+                {providerLabel && (
+                  <Badge variant="outline" className="ml-1 px-1 py-0 text-[10px] leading-3">
+                    {providerLabel}
+                  </Badge>
+                )}
                 {sessionView.messageCount > 0 && (
                   <Badge variant="secondary" className="ml-auto px-1 py-0 text-xs">
                     {sessionView.messageCount}
@@ -142,6 +157,11 @@ export default function SidebarSessionItem({
                 <span className="text-xs text-muted-foreground">
                   {formatTimeAgo(sessionView.sessionTime, currentTime, t)}
                 </span>
+                {providerLabel && (
+                  <Badge variant="outline" className="ml-1 px-1 py-0 text-[10px] leading-3">
+                    {providerLabel}
+                  </Badge>
+                )}
                 {sessionView.messageCount > 0 && (
                   <Badge
                     variant="secondary"

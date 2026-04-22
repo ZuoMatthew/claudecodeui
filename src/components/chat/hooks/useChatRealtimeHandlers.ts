@@ -136,6 +136,22 @@ export function useChatRealtimeHandlers({
           const statusSessionId = msg.sessionId;
           if (!statusSessionId) return;
 
+          // Fallback for fast OpenCode events where session_created can be superseded
+          // by session-status before React processes both WebSocket frames.
+          if (
+            msg.provider === 'opencode' &&
+            (!currentSessionId || currentSessionId.startsWith('new-session-')) &&
+            !selectedSession?.id
+          ) {
+            sessionStorage.setItem('pendingSessionId', statusSessionId);
+            if (pendingViewSessionRef.current && !pendingViewSessionRef.current.sessionId) {
+              pendingViewSessionRef.current.sessionId = statusSessionId;
+            }
+            setCurrentSessionId(statusSessionId);
+            onReplaceTemporarySession?.(statusSessionId);
+            onNavigateToSession?.(statusSessionId);
+          }
+
           const status = msg.status;
           if (status) {
             const statusInfo = {

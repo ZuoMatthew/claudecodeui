@@ -40,6 +40,7 @@ interface UseChatComposerStateArgs {
   claudeModel: string;
   codexModel: string;
   geminiModel: string;
+  opencodeModel: string;
   isLoading: boolean;
   canAbortSession: boolean;
   tokenBudget: Record<string, unknown> | null;
@@ -112,6 +113,7 @@ export function useChatComposerState({
   claudeModel,
   codexModel,
   geminiModel,
+  opencodeModel,
   isLoading,
   canAbortSession,
   tokenBudget,
@@ -281,7 +283,16 @@ export function useChatComposerState({
           projectName: selectedProject.name,
           sessionId: currentSessionId,
           provider,
-          model: provider === 'cursor' ? cursorModel : provider === 'codex' ? codexModel : provider === 'gemini' ? geminiModel : claudeModel,
+          model:
+            provider === 'cursor'
+              ? cursorModel
+              : provider === 'codex'
+                ? codexModel
+                : provider === 'gemini'
+                  ? geminiModel
+                  : provider === 'opencode'
+                    ? opencodeModel
+                    : claudeModel,
           tokenUsage: tokenBudget,
         };
 
@@ -336,6 +347,7 @@ export function useChatComposerState({
       handleBuiltInCommand,
       handleCustomCommand,
       input,
+      opencodeModel,
       provider,
       selectedProject,
       addMessage,
@@ -527,8 +539,11 @@ export function useChatComposerState({
         }
       }
 
+      const pathname = typeof window !== 'undefined' ? window.location.pathname : '';
+      const isOnSessionRoute = /^\/session\//.test(pathname);
+      const persistedCursorSessionId = provider === 'cursor' ? sessionStorage.getItem('cursorSessionId') : null;
       const effectiveSessionId =
-        currentSessionId || selectedSession?.id || sessionStorage.getItem('cursorSessionId');
+        selectedSession?.id || (isOnSessionRoute ? currentSessionId : null) || persistedCursorSessionId;
       const sessionToActivate = effectiveSessionId || `new-session-${Date.now()}`;
 
       const userMessage: ChatMessage = {
@@ -638,6 +653,20 @@ export function useChatComposerState({
             toolsSettings,
           },
         });
+      } else if (provider === 'opencode') {
+        sendMessage({
+          type: 'opencode-command',
+          command: messageContent,
+          sessionId: effectiveSessionId,
+          options: {
+            cwd: resolvedProjectPath,
+            projectPath: resolvedProjectPath,
+            sessionId: effectiveSessionId,
+            resume: Boolean(effectiveSessionId),
+            model: opencodeModel || 'auto',
+            sessionSummary,
+          },
+        });
       } else {
         sendMessage({
           type: 'claude-command',
@@ -697,6 +726,7 @@ export function useChatComposerState({
       setIsUserScrolledUp,
       slashCommands,
       thinkingMode,
+      opencodeModel,
     ],
   );
 

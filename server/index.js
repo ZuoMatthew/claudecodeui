@@ -1484,7 +1484,7 @@ function handleChatConnection(ws, request) {
                 let sessionId = data.options?.sessionId;
                 try {
                     // Dynamic import to avoid issues if module not loaded yet
-                    const { initOpenCode, createSession, sendPrompt } = await import('./providers/opencode/acp-adapter.js');
+                    const { initOpenCode, createSession, sendPrompt, getClient } = await import('./providers/opencode/acp-adapter.js');
 
                     // Initialize OpenCode ACP server if needed
                     await initOpenCode();
@@ -1526,6 +1526,40 @@ function handleChatConnection(ws, request) {
                         isProcessing: true
                     });
 
+                    // Subscribe to OpenCode event stream for real-time streaming
+                    let eventStreamController = null;
+                    let streamEnded = false;
+
+                    const startEventStream = async () => {
+                        try {
+                            const client = await getClient();
+                            const stream = await client.event.list();
+                            eventStreamController = stream.controller;
+
+                            for await (const event of stream) {
+                                if (streamEnded) break;
+
+                                if (event.type === 'message.part.updated') {
+                                    const part = event.properties?.part;
+                                    if (part?.type === 'text' && part?.text) {
+                                        writer.send(createNormalizedMessage({
+                                            kind: 'stream_delta',
+                                            content: part.text,
+                                            sessionId: sessionId,
+                                            provider: 'opencode',
+                                        }));
+                                    }
+                                }
+                            }
+                        } catch (err) {
+                            // Event stream errors are non-fatal; sendPrompt will still complete
+                            console.warn('[OpenCode] Event stream error:', err.message);
+                        }
+                    };
+
+                    // Start event stream in parallel
+                    const eventStreamPromise = startEventStream();
+
                     // Send the prompt/message
                     console.log('[DEBUG] Sending prompt to session:', sessionId);
                     if (data.command && sessionId) {
@@ -1545,45 +1579,35 @@ function handleChatConnection(ws, request) {
                         console.log('[DEBUG] OpenCode response received:', JSON.stringify(response)?.substring(0, 500));
                     } catch (err) {
                         console.error('[DEBUG] OpenCode sendPrompt error:', err.message);
+                        streamEnded = true;
+                        if (eventStreamController) {
+                            eventStreamController.abort();
+                        }
                         throw err;
                     }
 
-                    // Stream the response back - response.data contains { info: AssistantMessage, parts: Array<Part> }
+                    // Stop event stream
+                    streamEnded = true;
+                    if (eventStreamController) {
+                        eventStreamController.abort();
+                    }
+
+                    // Record assistant message (streaming already happened via events)
                     console.log('[DEBUG] Processing response, response is:', response ? 'truthy' : 'falsy', response?.constructor?.name);
                     let assistantText = '';
                     if (response) {
                         const responseData = response.data || response;
-                        // Extract text content from parts array
+                        // Extract text content from parts array for recording
                         if (responseData.parts && Array.isArray(responseData.parts)) {
                             for (const part of responseData.parts) {
                                 if (part.type === 'text' && part.text) {
                                     assistantText += part.text;
-                                    writer.send(createNormalizedMessage({
-                                        kind: 'stream_delta',
-                                        content: part.text,
-                                        sessionId: sessionId,
-                                        provider: 'opencode',
-                                    }));
                                 }
                             }
                         } else if (typeof responseData === 'string') {
-                            // Fallback for string responses
-                            assistantText += responseData;
-                            writer.send(createNormalizedMessage({
-                                kind: 'stream_delta',
-                                content: responseData,
-                                sessionId: sessionId,
-                                provider: 'opencode',
-                            }));
+                            assistantText = responseData;
                         } else {
-                            // Last resort: stringify the whole response
-                            assistantText += JSON.stringify(responseData);
-                            writer.send(createNormalizedMessage({
-                                kind: 'stream_delta',
-                                content: JSON.stringify(responseData),
-                                sessionId: sessionId,
-                                provider: 'opencode',
-                            }));
+                            assistantText = JSON.stringify(responseData);
                         }
                     }
 
@@ -1625,6 +1649,11 @@ function handleChatConnection(ws, request) {
 
                 } catch (error) {
                     console.error('[DEBUG] OpenCode ACP error:', error.message);
+                    // Ensure event stream is stopped on error
+                    streamEnded = true;
+                    if (eventStreamController) {
+                        eventStreamController.abort();
+                    }
                     writer.send(createNormalizedMessage({
                         kind: 'error',
                         content: `OpenCode error: ${error.message}`,

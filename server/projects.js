@@ -200,6 +200,7 @@ async function detectTaskMasterFolder(projectPath) {
 const projectDirectoryCache = new Map();
 const opencodeRuntimeSessions = new Map();
 const MAX_OPENCODE_RUNTIME_SESSIONS = 500;
+const DEFAULT_OPENCODE_SESSIONS_LIMIT = 50;
 
 function pruneOpenCodeRuntimeSessions() {
   if (opencodeRuntimeSessions.size <= MAX_OPENCODE_RUNTIME_SESSIONS) {
@@ -321,6 +322,75 @@ function getOpenCodeRuntimeProjectPaths() {
   }
 
   return Array.from(uniquePaths.values());
+}
+
+function getOpenCodeDbPath() {
+  // Keep aligned with OpenCode adapter path resolution.
+  return path.join(os.homedir(), '.local', 'share', 'opencode', 'opencode.db');
+}
+
+function parseOpenCodeTimestamp(value) {
+  if (value === null || value === undefined) return new Date().toISOString();
+  const numeric = Number(value);
+  if (Number.isFinite(numeric)) {
+    return new Date(numeric).toISOString();
+  }
+  const parsed = new Date(value);
+  if (!Number.isNaN(parsed.getTime())) {
+    return parsed.toISOString();
+  }
+  return new Date().toISOString();
+}
+
+function getOpenCodeSessionsFromDb(projectPath) {
+  const normalizedProjectPath = normalizeComparablePath(projectPath);
+  if (!normalizedProjectPath) return [];
+
+  let db;
+  try {
+    db = new Database(getOpenCodeDbPath(), { readonly: true });
+    const rows = db.prepare(`
+      SELECT
+        s.id AS id,
+        s.directory AS directory,
+        s.title AS title,
+        s.slug AS slug,
+        s.time_created AS time_created,
+        s.time_updated AS time_updated,
+        COALESCE(m.message_count, 0) AS message_count
+      FROM session s
+      LEFT JOIN (
+        SELECT session_id, COUNT(*) AS message_count
+        FROM message
+        GROUP BY session_id
+      ) m ON m.session_id = s.id
+      ORDER BY s.time_updated DESC
+    `).all();
+
+    return rows
+      .filter((row) => {
+        const rowPath = normalizeComparablePath(row.directory || '');
+        return Boolean(rowPath) && rowPath === normalizedProjectPath;
+      })
+      .map((row) => ({
+        id: row.id,
+        summary: coerceSummary(row.title || row.slug || 'OpenCode Session'),
+        messageCount: Number(row.message_count || 0),
+        lastActivity: parseOpenCodeTimestamp(row.time_updated),
+        cwd: row.directory || projectPath,
+        name: row.title || 'OpenCode Session',
+        createdAt: parseOpenCodeTimestamp(row.time_created),
+      }));
+  } catch (error) {
+    console.warn('[OpenCode] Failed to read sessions from DB fallback:', error.message);
+    return [];
+  } finally {
+    try {
+      db?.close();
+    } catch {
+      // ignore close errors
+    }
+  }
 }
 
 function encodeProjectNameFromPath(projectPath) {
@@ -1686,14 +1756,19 @@ async function getCodexSessions(projectPath, options = {}) {
 
 // Fetch OpenCode sessions for a given project path
 async function getOpenCodeSessions(projectPath, options = {}) {
-  const { limit = 5 } = options;
+  const { limit = DEFAULT_OPENCODE_SESSIONS_LIMIT } = options;
   try {
     const normalizedProjectPath = normalizeComparablePath(projectPath);
     if (!normalizedProjectPath) {
       return [];
     }
 
-    const sessions = await listSessions(projectPath);
+    let sessions = [];
+    try {
+      sessions = await listSessions(projectPath);
+    } catch (error) {
+      console.warn('[OpenCode] ACP listSessions failed, continuing with DB fallback:', error.message);
+    }
 
     const persistedSessions = sessions
       .filter(session => {
@@ -1706,12 +1781,12 @@ async function getOpenCodeSessions(projectPath, options = {}) {
       })
       .map(session => {
         const firstUserMessage = session.messages?.find(m => m.role === 'user')?.content ||
-          session.summary ||
+          (typeof session.summary === 'string' ? session.summary : null) ||
           'OpenCode Session';
 
         return {
           id: session.id,
-          summary: firstUserMessage.slice(0, 100),
+          summary: typeof firstUserMessage === 'string' ? firstUserMessage.slice(0, 100) : 'OpenCode Session',
           messageCount: session.messages?.length || session.messageCount || 0,
           lastActivity: session.lastActivity || session.updatedAt || new Date().toISOString(),
           cwd: session.cwd || session.directory || session.path || projectPath,
@@ -1720,9 +1795,13 @@ async function getOpenCodeSessions(projectPath, options = {}) {
         };
       })
       .sort((a, b) => new Date(b.lastActivity) - new Date(a.lastActivity));
+    const dbSessions = getOpenCodeSessionsFromDb(projectPath);
     const runtimeSessions = getOpenCodeRuntimeSessions(projectPath);
     const mergedById = new Map();
 
+    for (const session of dbSessions) {
+      mergedById.set(session.id, session);
+    }
     for (const session of runtimeSessions) {
       mergedById.set(session.id, session);
     }

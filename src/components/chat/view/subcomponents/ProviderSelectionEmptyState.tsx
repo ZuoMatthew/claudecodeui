@@ -1,8 +1,7 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import { Check, ChevronDown } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import { useServerPlatform } from "../../../../hooks/useServerPlatform";
 import SessionProviderLogo from "../../../llm-logo-provider/SessionProviderLogo";
 import {
   CLAUDE_MODELS,
@@ -43,6 +42,7 @@ type ProviderSelectionEmptyStateProps = {
   setGeminiModel: (model: string) => void;
   opencodeModel: string;
   setOpencodeModel: (model: string) => void;
+  opencodeModelOptions: { value: string; label: string }[];
   tasksEnabled: boolean;
   isTaskMasterInstalled: boolean | null;
   onShowAllTasks?: (() => void) | null;
@@ -54,22 +54,6 @@ type ProviderGroup = {
   name: string;
   models: { value: string; label: string }[];
 };
-
-const PROVIDER_GROUPS: ProviderGroup[] = [
-  { id: "claude", name: "Anthropic", models: CLAUDE_MODELS.OPTIONS },
-  { id: "cursor", name: "Cursor", models: CURSOR_MODELS.OPTIONS },
-  { id: "codex", name: "OpenAI", models: CODEX_MODELS.OPTIONS },
-  { id: "gemini", name: "Google", models: GEMINI_MODELS.OPTIONS },
-  { id: "opencode", name: "OpenCode", models: OPENCODE_MODELS.OPTIONS },
-];
-
-function getModelConfig(p: LLMProvider) {
-  if (p === "claude") return CLAUDE_MODELS;
-  if (p === "codex") return CODEX_MODELS;
-  if (p === "gemini") return GEMINI_MODELS;
-  if (p === "opencode") return OPENCODE_MODELS;
-  return CURSOR_MODELS;
-}
 
 function getCurrentModel(
   p: LLMProvider,
@@ -87,7 +71,7 @@ function getCurrentModel(
 }
 
 function getProviderDisplayName(p: LLMProvider) {
-  if (p === "claude") return "Claude";
+  if (p === "claude") return "Claude Code";
   if (p === "cursor") return "Cursor";
   if (p === "codex") return "Codex";
   if (p === "opencode") return "OpenCode";
@@ -110,26 +94,31 @@ export default function ProviderSelectionEmptyState({
   setGeminiModel,
   opencodeModel,
   setOpencodeModel,
+  opencodeModelOptions,
   tasksEnabled,
   isTaskMasterInstalled,
   onShowAllTasks,
   setInput,
 }: ProviderSelectionEmptyStateProps) {
   const { t } = useTranslation("chat");
-  const { isWindowsServer } = useServerPlatform();
-  const [dialogOpen, setDialogOpen] = useState(false);
-
-  const visibleProviderGroups = useMemo(
-    () => (isWindowsServer ? PROVIDER_GROUPS.filter((p) => p.id !== "cursor") : PROVIDER_GROUPS),
-    [isWindowsServer],
+  const providerGroups = useMemo<ProviderGroup[]>(
+    () => [
+      { id: "claude", name: "Anthropic", models: CLAUDE_MODELS.OPTIONS },
+      { id: "cursor", name: "Cursor", models: CURSOR_MODELS.OPTIONS },
+      { id: "codex", name: "OpenAI", models: CODEX_MODELS.OPTIONS },
+      { id: "gemini", name: "Google", models: GEMINI_MODELS.OPTIONS },
+      {
+        id: "opencode",
+        name: "OpenCode",
+        models: opencodeModelOptions.length > 0 ? opencodeModelOptions : OPENCODE_MODELS.OPTIONS,
+      },
+    ],
+    [opencodeModelOptions],
   );
 
-  useEffect(() => {
-    if (isWindowsServer && provider === "cursor") {
-      setProvider("claude");
-      localStorage.setItem("selected-provider", "claude");
-    }
-  }, [isWindowsServer, provider, setProvider]);
+  const [dialogOpen, setDialogOpen] = useState(false);
+
+  const visibleProviderGroups = providerGroups;
 
   const nextTaskPrompt = t("tasks.nextTaskPrompt", {
     defaultValue: "Start the next task",
@@ -145,12 +134,13 @@ export default function ProviderSelectionEmptyState({
   );
 
   const currentModelLabel = useMemo(() => {
-    const config = getModelConfig(provider);
-    const found = config.OPTIONS.find(
+    const group = providerGroups.find((item) => item.id === provider);
+    const options = group?.models || [];
+    const found = options.find(
       (o: { value: string; label: string }) => o.value === currentModel,
     );
     return found?.label || currentModel;
-  }, [provider, currentModel]);
+  }, [provider, currentModel, providerGroups]);
 
   const setModelForProvider = useCallback(
     (providerId: LLMProvider, modelValue: string) => {
@@ -185,6 +175,19 @@ export default function ProviderSelectionEmptyState({
     [setProvider, setModelForProvider, textareaRef],
   );
 
+  const handleProviderSelect = useCallback(
+    (providerId: LLMProvider) => {
+      setProvider(providerId);
+      localStorage.setItem("selected-provider", providerId);
+      setTimeout(() => textareaRef.current?.focus(), 100);
+    },
+    [setProvider, textareaRef],
+  );
+
+  const selectedProviderGroup = useMemo(() => {
+    return visibleProviderGroups.find((group) => group.id === provider) || null;
+  }, [provider, visibleProviderGroups]);
+
   if (!selectedSession && !currentSessionId) {
     return (
       <div className="flex h-full items-center justify-center px-4">
@@ -196,6 +199,27 @@ export default function ProviderSelectionEmptyState({
             <p className="mt-1 text-[13px] text-muted-foreground">
               {t("providerSelection.description")}
             </p>
+          </div>
+
+          <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-3">
+            {visibleProviderGroups.map((group) => {
+              const isActive = provider === group.id;
+              return (
+                <button
+                  key={`provider-${group.id}`}
+                  type="button"
+                  onClick={() => handleProviderSelect(group.id)}
+                  className={`flex items-center gap-2 rounded-md border px-2.5 py-2 text-left text-xs transition-colors ${
+                    isActive
+                      ? "border-primary bg-primary/10 text-foreground"
+                      : "border-border/60 bg-background text-muted-foreground hover:border-border hover:text-foreground"
+                  }`}
+                >
+                  <SessionProviderLogo provider={group.id} className="h-4 w-4 shrink-0" />
+                  <span className="truncate font-medium">{getProviderDisplayName(group.id)}</span>
+                </button>
+              );
+            })}
           </div>
 
           <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
@@ -245,23 +269,23 @@ export default function ProviderSelectionEmptyState({
                       defaultValue: "No models found.",
                     })}
                   </CommandEmpty>
-                  {visibleProviderGroups.map((group) => (
+                  {selectedProviderGroup && (
                     <CommandGroup
-                      key={group.id}
+                      key={selectedProviderGroup.id}
                       heading={
                         <span className="flex items-center gap-1.5">
-                          <SessionProviderLogo provider={group.id} className="h-3.5 w-3.5 shrink-0" />
-                          {group.name}
+                          <SessionProviderLogo provider={selectedProviderGroup.id} className="h-3.5 w-3.5 shrink-0" />
+                          {selectedProviderGroup.name}
                         </span>
                       }
                     >
-                      {group.models.map((model) => {
-                        const isSelected = provider === group.id && currentModel === model.value;
+                      {selectedProviderGroup.models.map((model) => {
+                        const isSelected = currentModel === model.value;
                         return (
                           <CommandItem
-                            key={`${group.id}-${model.value}`}
-                            value={`${group.name} ${model.label}`}
-                            onSelect={() => handleModelSelect(group.id, model.value)}
+                            key={`${selectedProviderGroup.id}-${model.value}`}
+                            value={model.label}
+                            onSelect={() => handleModelSelect(selectedProviderGroup.id, model.value)}
                           >
                             <span className="flex-1 truncate">{model.label}</span>
                             {isSelected && (
@@ -271,7 +295,7 @@ export default function ProviderSelectionEmptyState({
                         );
                       })}
                     </CommandGroup>
-                  ))}
+                  )}
                 </CommandList>
               </Command>
             </DialogContent>

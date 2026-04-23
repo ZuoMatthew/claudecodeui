@@ -12,7 +12,9 @@ import {
   deleteSession,
   getSession,
   getSessionMessages,
+  listProviderModels,
   initOpenCode,
+  getClient,
   isInitialized,
   getStatus,
   closeOpenCode,
@@ -113,6 +115,27 @@ router.get('/mode', (req, res) => {
     usingCliFallback: shouldUseCliFallback(),
     ...getStatus(),
   });
+});
+
+/**
+ * GET /api/opencode/models
+ * List available OpenCode provider/model options for UI selection
+ */
+router.get('/models', async (req, res) => {
+  try {
+    if (!isInitialized()) {
+      await initOpenCode();
+    } else {
+      // Ensure existing instance is usable.
+      await getClient();
+    }
+    const directory = typeof req.query?.directory === 'string' ? req.query.directory : undefined;
+    const models = await listProviderModels(directory);
+    res.json(models);
+  } catch (error) {
+    console.error('Error listing OpenCode models:', error);
+    res.status(500).json({ error: error.message });
+  }
 });
 
 /**

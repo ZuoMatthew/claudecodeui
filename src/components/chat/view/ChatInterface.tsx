@@ -76,7 +76,6 @@ function ChatInterface({
     setGeminiModel,
     opencodeModel,
     setOpencodeModel,
-    opencodeModelOptions,
     permissionMode,
     pendingPermissionRequests,
     setPendingPermissionRequests,
@@ -327,12 +326,9 @@ function ChatInterface({
           setCodexModel={setCodexModel}
           geminiModel={geminiModel}
           setGeminiModel={setGeminiModel}
-          opencodeModel={opencodeModel}
-          setOpencodeModel={setOpencodeModel}
-          opencodeModelOptions={opencodeModelOptions}
           tasksEnabled={tasksEnabled}
           isTaskMasterInstalled={isTaskMasterInstalled}
-          onShowAllTasks={onShowAllTasks || undefined}
+          onShowAllTasks={onShowAllTasks}
           setInput={setInput}
           isLoadingMoreMessages={isLoadingMoreMessages}
           hasMoreMessages={hasMoreMessages}

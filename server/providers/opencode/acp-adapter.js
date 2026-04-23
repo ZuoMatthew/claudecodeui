@@ -390,122 +390,15 @@ function resolveModelOverride(model) {
     return undefined;
   }
 
-  const trimmed = model.trim();
-  const normalized = trimmed.toLowerCase();
+  const normalized = model.trim().toLowerCase();
   // UI-level aliases map to provider defaults; do not send invalid model IDs.
   if (!normalized || normalized === 'auto' || normalized === 'claude' || normalized === 'gpt' || normalized === 'gemini') {
     return undefined;
   }
 
-  const normalizeProviderID = (providerID) => {
-    const key = String(providerID || '').trim().toLowerCase();
-    if (!key) return '';
-    if (key === 'claude' || key === 'anthropic') return 'anthropic';
-    if (key === 'gpt' || key === 'openai') return 'openai';
-    if (key === 'gemini' || key === 'google') return 'google';
-    if (key === 'xai' || key === 'grok') return 'xai';
-    return key;
-  };
-
-  // Preferred format in OpenCode is "provider/model".
-  if (trimmed.includes('/')) {
-    const [providerRaw, ...modelParts] = trimmed.split('/');
-    const providerID = normalizeProviderID(providerRaw);
-    const modelID = modelParts.join('/').trim();
-    if (providerID && modelID) {
-      return { providerID, modelID };
-    }
-  }
-
-  // Accept "provider:model" as a convenience alias.
-  if (trimmed.includes(':')) {
-    const [providerRaw, ...modelParts] = trimmed.split(':');
-    const providerID = normalizeProviderID(providerRaw);
-    const modelID = modelParts.join(':').trim();
-    if (providerID && modelID) {
-      return { providerID, modelID };
-    }
-  }
-
-  // Backward-compatible heuristic for raw model IDs.
-  if (normalized.startsWith('claude')) {
-    return { providerID: 'anthropic', modelID: trimmed };
-  }
-  if (normalized.startsWith('gpt') || normalized.startsWith('o1') || normalized.startsWith('o3') || normalized.startsWith('o4')) {
-    return { providerID: 'openai', modelID: trimmed };
-  }
-  if (normalized.startsWith('gemini')) {
-    return { providerID: 'google', modelID: trimmed };
-  }
-
-  // Unknown raw model IDs should fall back to OpenCode defaults rather than forcing a wrong provider.
-  return undefined;
-}
-
-/**
- * List OpenCode provider models flattened for UI selector consumption.
- * @param {string|undefined} directory
- * @returns {Promise<{options: Array<{value: string, label: string, providerId: string, providerName: string, modelId: string, status: string|null}>, defaults: Record<string,string>, connected: Array<string>}>}
- */
-export async function listProviderModels(directory) {
-  const client = await getClient();
-  const response = await client.provider.list({
-    query: {
-      directory,
-    },
-  });
-  const payload = response?.data || response || {};
-  const providers = Array.isArray(payload?.all) ? payload.all : [];
-  const connectedProviders = Array.isArray(payload?.connected)
-    ? payload.connected.map((id) => String(id))
-    : [];
-  const connectedSet = new Set(connectedProviders);
-  const visibleProviders = connectedSet.size > 0
-    ? providers.filter((provider) => connectedSet.has(String(provider?.id || '')))
-    : providers;
-  const options = [];
-
-  for (const provider of visibleProviders) {
-    if (!provider || typeof provider !== 'object') continue;
-    const providerId = String(provider.id || '').trim();
-    const providerName = String(provider.name || providerId || 'Provider').trim();
-    const modelMap = provider.models && typeof provider.models === 'object'
-      ? provider.models
-      : {};
-    for (const [modelKey, modelMeta] of Object.entries(modelMap)) {
-      const modelId = String(modelMeta?.id || modelKey || '').trim();
-      if (!providerId || !modelId) continue;
-      options.push({
-        value: `${providerId}/${modelId}`,
-        label: `${providerName}: ${modelMeta?.name || modelId}`,
-        providerId,
-        providerName,
-        modelId,
-        status: modelMeta?.status || null,
-      });
-    }
-  }
-
-  options.sort((a, b) => {
-    if (a.providerName !== b.providerName) {
-      return a.providerName.localeCompare(b.providerName);
-    }
-    return a.modelId.localeCompare(b.modelId);
-  });
-
-  const defaults = payload?.default && typeof payload.default === 'object'
-    ? Object.fromEntries(
-      Object.entries(payload.default).filter(([providerId]) => {
-        if (connectedSet.size === 0) return true;
-        return connectedSet.has(String(providerId));
-      }),
-    )
-    : {};
-
   return {
-    options,
-    defaults,
-    connected: connectedProviders,
+    providerID: 'anthropic',
+    modelID: model,
   };
 }
 

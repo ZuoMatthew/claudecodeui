@@ -28,7 +28,6 @@ interface ChatMessagesPaneProps {
   setGeminiModel: (model: string) => void;
   opencodeModel: string;
   setOpencodeModel: (model: string) => void;
-  opencodeModelOptions: { value: string; label: string }[];
   tasksEnabled: boolean;
   isTaskMasterInstalled: boolean | null;
   onShowAllTasks?: () => void;
@@ -76,7 +75,6 @@ export default function ChatMessagesPane({
   setGeminiModel,
   opencodeModel,
   setOpencodeModel,
-  opencodeModelOptions,
   tasksEnabled,
   isTaskMasterInstalled,
   onShowAllTasks,
@@ -162,7 +160,6 @@ export default function ChatMessagesPane({
           setGeminiModel={setGeminiModel}
           opencodeModel={opencodeModel}
           setOpencodeModel={setOpencodeModel}
-          opencodeModelOptions={opencodeModelOptions}
           tasksEnabled={tasksEnabled}
           isTaskMasterInstalled={isTaskMasterInstalled}
           onShowAllTasks={onShowAllTasks}

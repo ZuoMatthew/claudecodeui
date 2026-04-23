@@ -8,8 +8,6 @@ interface UseChatProviderStateArgs {
   selectedSession: ProjectSession | null;
 }
 
-type ModelOption = { value: string; label: string };
-
 export function useChatProviderState({ selectedSession }: UseChatProviderStateArgs) {
   const [permissionMode, setPermissionMode] = useState<PermissionMode>('default');
   const [pendingPermissionRequests, setPendingPermissionRequests] = useState<PendingPermissionRequest[]>([]);
@@ -31,7 +29,6 @@ export function useChatProviderState({ selectedSession }: UseChatProviderStateAr
   const [opencodeModel, setOpencodeModel] = useState<string>(() => {
     return localStorage.getItem('opencode-model') || OPENCODE_MODELS.DEFAULT;
   });
-  const [opencodeModelOptions, setOpencodeModelOptions] = useState<ModelOption[]>(() => OPENCODE_MODELS.OPTIONS);
 
   const lastProviderRef = useRef(provider);
 
@@ -89,57 +86,6 @@ export function useChatProviderState({ selectedSession }: UseChatProviderStateAr
       });
   }, [provider]);
 
-  useEffect(() => {
-    let cancelled = false;
-
-    const loadOpenCodeModels = async () => {
-      try {
-        const response = await authenticatedFetch('/api/opencode/models');
-        if (!response.ok) {
-          return;
-        }
-        const data = await response.json();
-        const dynamicOptions = Array.isArray(data?.options)
-          ? data.options
-            .filter((item: unknown) => typeof item === 'object' && item !== null)
-            .map((item: { value?: unknown; label?: unknown }) => ({
-              value: String(item.value || '').trim(),
-              label: String(item.label || item.value || '').trim(),
-            }))
-            .filter((item: ModelOption) => Boolean(item.value && item.label))
-          : [];
-
-        if (cancelled || dynamicOptions.length === 0) {
-          return;
-        }
-
-        // Keep selector responsive: dedupe + cap size while preserving server order.
-        const byValue = new Map<string, ModelOption>();
-        for (const option of dynamicOptions) {
-          if (!byValue.has(option.value)) {
-            byValue.set(option.value, option);
-          }
-        }
-        const dedupedDynamic = Array.from(byValue.values());
-        const limitedDynamic = dedupedDynamic.slice(0, 300);
-
-        // Always include static quick aliases, then append dynamic options.
-        const merged: ModelOption[] = [
-          ...OPENCODE_MODELS.OPTIONS,
-          ...limitedDynamic.filter((item: ModelOption) => item.value !== OPENCODE_MODELS.DEFAULT),
-        ];
-        setOpencodeModelOptions(merged);
-      } catch (error) {
-        console.error('Error loading OpenCode model list:', error);
-      }
-    };
-
-    loadOpenCodeModels();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
   const cyclePermissionMode = useCallback(() => {
     const modes: PermissionMode[] =
       provider === 'codex'
@@ -169,7 +115,6 @@ export function useChatProviderState({ selectedSession }: UseChatProviderStateAr
     setGeminiModel,
     opencodeModel,
     setOpencodeModel,
-    opencodeModelOptions,
     permissionMode,
     setPermissionMode,
     pendingPermissionRequests,

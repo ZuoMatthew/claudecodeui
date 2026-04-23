@@ -10,10 +10,6 @@ function includeProviderInGlobalMcp(providerId: LLMProvider): boolean {
     return false;
   }
 
-  if (providerId === 'opencode') {
-    return false;
-  }
-
   return true;
 }
 

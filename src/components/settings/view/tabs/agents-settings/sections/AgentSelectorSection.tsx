@@ -4,7 +4,6 @@ import type { AgentProvider } from '../../../../types/types';
 import type { AgentSelectorSectionProps } from '../types';
 
 const AGENT_PROVIDERS: AgentProvider[] = ['claude', 'cursor', 'codex', 'gemini', 'opencode'];
-
 const AGENT_NAMES: Record<AgentProvider, string> = {
   claude: 'Claude',
   cursor: 'Cursor',
@@ -14,6 +13,7 @@ const AGENT_NAMES: Record<AgentProvider, string> = {
 };
 
 export default function AgentSelectorSection({
+  agents,
   selectedAgent,
   onSelectAgent,
   agentContextById,
@@ -21,7 +21,7 @@ export default function AgentSelectorSection({
   return (
     <div className="flex-shrink-0 border-b border-border px-3 py-2 md:px-4 md:py-3">
       <PillBar className="w-full md:w-auto">
-        {AGENT_PROVIDERS.map((agent) => {
+        {agents.map((agent) => {
           const dotColor =
             agent === 'claude' ? 'bg-blue-500' :
             agent === 'cursor' ? 'bg-purple-500' :
